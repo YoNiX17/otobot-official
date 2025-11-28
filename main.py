@@ -18,9 +18,12 @@ def format_time(milliseconds):
     """Convertit les ms en format mm:ss"""
     seconds = int(milliseconds / 1000)
     minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
 
-def create_progress_bar(position, duration, length=15):
+def create_progress_bar(position, duration, length=20):
     """Crée une barre de progression visuelle"""
     if duration == 0: return "🔘" + "▬" * length
     percentage = position / duration
@@ -28,69 +31,115 @@ def create_progress_bar(position, duration, length=15):
     empty = length - filled
     return "▬" * filled + "🔘" + "▬" * empty
 
-# --- INTERFACE (BOUTONS) ---
+# --- COMPOSANTS D'INTERFACE ---
+
+class FilterSelect(discord.ui.Select):
+    def __init__(self, player: wavelink.Player):
+        options = [
+            discord.SelectOption(label="Aucun Effet", description="Son normal", emoji="💿", value="none"),
+            discord.SelectOption(label="Bass Boost", description="Pour les grosses basses", emoji="💥", value="bass"),
+            discord.SelectOption(label="Nightcore", description="Plus rapide et aigu", emoji="🐱", value="nightcore"),
+            discord.SelectOption(label="Vaporwave", description="Lent et esthétique", emoji="🌴", value="vaporwave"),
+            discord.SelectOption(label="8D Audio", description="Son rotatif", emoji="🎧", value="8d"),
+        ]
+        super().__init__(placeholder="🎛️ Choisir un effet audio...", min_values=1, max_values=1, options=options, row=0)
+        self.player = player
+
+    async def callback(self, interaction: discord.Interaction):
+        value = self.values[0]
+        filters: wavelink.Filters = self.player.filters
+        filters.reset() # Reset des anciens filtres
+
+        if value == "bass":
+            filters.equalizer.set(band=0, gain=0.3)
+            filters.equalizer.set(band=1, gain=0.2)
+        elif value == "nightcore":
+            filters.timescale.set(pitch=1.2, speed=1.1)
+        elif value == "vaporwave":
+            filters.timescale.set(pitch=0.8, speed=0.85)
+        elif value == "8d":
+            filters.rotation.set(rotation_hz=0.2)
+        
+        await self.player.set_filters(filters)
+        await interaction.response.send_message(f"🎛️ **Filtre appliqué :** {self.options[self.options.index(next(o for o in self.options if o.value == value))].label}", ephemeral=True)
+
 class MusicControls(discord.ui.View):
     def __init__(self, player: wavelink.Player):
         super().__init__(timeout=None)
         self.player = player
+        # On ajoute le menu déroulant en haut
+        self.add_item(FilterSelect(player))
 
-    @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.blurple)
+    # --- LIGNE 1 : Contrôles de lecture ---
+    
+    @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary, row=1)
+    async def restart(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.player.seek(0)
+        await interaction.response.send_message("⏮️ **Recommencé**", ephemeral=True)
+
+    @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.primary, row=1)
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.player.paused:
             await self.player.pause(False)
             button.style = discord.ButtonStyle.green
-            await interaction.response.send_message("▶️ **Lecture reprise**", ephemeral=True)
         else:
             await self.player.pause(True)
             button.style = discord.ButtonStyle.red
-            await interaction.response.send_message("⏸️ **En pause**", ephemeral=True)
-        await interaction.message.edit(view=self)
+        await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
-    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏭️ **Musique passée**", ephemeral=True)
-        await self.player.skip(force=True)
-
-    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger)
+    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=1)
     async def stop_music(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.player.disconnect()
-        await interaction.response.send_message("👋 **Arrêt et déconnexion**", ephemeral=True)
+        await interaction.response.send_message("👋 **Fermeture du lecteur**", ephemeral=True)
         self.stop()
 
-    @discord.ui.button(emoji="🔂", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, row=1)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("⏭️ **Passé !**", ephemeral=True)
+        await self.player.skip(force=True)
+
+    # --- LIGNE 2 : Options (Volume, Queue, Loop) ---
+
+    @discord.ui.button(emoji="🔉", style=discord.ButtonStyle.secondary, row=2)
+    async def vol_down(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_vol = max(0, self.player.volume - 10)
+        await self.player.set_volume(new_vol)
+        await interaction.response.send_message(f"🔉 Volume : **{new_vol}%**", ephemeral=True)
+
+    @discord.ui.button(emoji="🔊", style=discord.ButtonStyle.secondary, row=2)
+    async def vol_up(self, interaction: discord.Interaction, button: discord.ui.Button):
+        new_vol = min(100, self.player.volume + 10)
+        await self.player.set_volume(new_vol)
+        await interaction.response.send_message(f"🔊 Volume : **{new_vol}%**", ephemeral=True)
+
+    @discord.ui.button(emoji="🔂", style=discord.ButtonStyle.secondary, row=2)
     async def loop(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.player.queue.mode == wavelink.QueueMode.normal:
             self.player.queue.mode = wavelink.QueueMode.loop
             button.style = discord.ButtonStyle.green
-            button.emoji = "🔂"
-            await interaction.response.send_message("🔂 **Mode boucle : Activé** (Cette musique)", ephemeral=True)
+            await interaction.response.send_message("🔂 **Boucle : Piste**", ephemeral=True)
         elif self.player.queue.mode == wavelink.QueueMode.loop:
             self.player.queue.mode = wavelink.QueueMode.loop_all
-            button.style = discord.ButtonStyle.primary
+            button.style = discord.ButtonStyle.blurple
             button.emoji = "🔁"
-            await interaction.response.send_message("🔁 **Mode boucle : File d'attente**", ephemeral=True)
+            await interaction.response.send_message("🔁 **Boucle : File**", ephemeral=True)
         else:
             self.player.queue.mode = wavelink.QueueMode.normal
             button.style = discord.ButtonStyle.secondary
             button.emoji = "➡️"
-            await interaction.response.send_message("➡️ **Mode boucle : Désactivé**", ephemeral=True)
+            await interaction.response.send_message("➡️ **Boucle : Désactivée**", ephemeral=True)
         await interaction.message.edit(view=self)
 
-    @discord.ui.button(emoji="📜", style=discord.ButtonStyle.gray, label="File")
+    @discord.ui.button(emoji="📜", label="Voir la File", style=discord.ButtonStyle.gray, row=2)
     async def show_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Affiche la file d'attente via un bouton"""
         if not self.player.queue:
-            return await interaction.response.send_message("La file d'attente est vide.", ephemeral=True)
+            return await interaction.response.send_message("📭 La file est vide.", ephemeral=True)
         
-        queue_list = ""
-        for i, track in enumerate(self.player.queue[:10]): # Affiche max 10
-            queue_list += f"`{i+1}.` {track.title} - *{track.author}*\n"
+        queue_text = ""
+        for i, track in enumerate(self.player.queue[:10]):
+            queue_text += f"`{i+1}.` **{track.title}** ({format_time(track.length)})\n"
         
-        remaining = len(self.player.queue) - 10
-        if remaining > 0:
-            queue_list += f"\n*...et {remaining} autres.*"
-
-        embed = discord.Embed(title="📜 File d'attente", description=queue_list, color=discord.Color.blurple())
+        embed = discord.Embed(title=f"📜 File d'attente ({len(self.player.queue)})", description=queue_text, color=0x2b2d31)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -113,195 +162,129 @@ class MusicBot(commands.Bot):
 
     async def on_ready(self):
         print(f'🤖 Connecté en tant que {self.user} (ID: {self.user.id})')
-        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="/play"))
+        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="de la musique"))
         try:
-            synced = await self.tree.sync()
-            print(f"🔄 {len(synced)} commandes slash synchronisées.")
+            await self.tree.sync()
+            print("🔄 Commandes synchronisées.")
         except Exception as e:
-            print(f"Erreur de synchro : {e}")
+            print(f"Erreur synchro: {e}")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         print(f"✅ Node Lavalink EN LIGNE : {payload.node.identifier}")
 
-    # --- ÉVÉNEMENTS DE LECTURE ---
-    
+    # --- CONSTRUCTION DE L'INTERFACE COMPLEXE ---
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
-        """Déclenché quand une musique commence"""
         player = payload.player
         if not player: return
         track = payload.track
         
-        embed = discord.Embed(
-            description=f"## [{track.title}]({track.uri})",
-            color=discord.Color.from_rgb(255, 0, 50) # Rouge YouTube
-        )
-        embed.set_author(name="Lecture en cours 🎵", icon_url=self.user.display_avatar.url)
-        
-        # Gestion visuelle (Image + Barre de progression)
-        if track.artwork: 
-            embed.set_thumbnail(url=track.artwork)
-        
+        # Calcul des infos
         duration = format_time(track.length)
-        embed.add_field(name="Artiste", value=track.author, inline=True)
-        embed.add_field(name="Durée", value=duration, inline=True)
-        embed.add_field(name="Demandé par", value=track.source, inline=True) # Affiche la source (Youtube/Spotify)
+        bar = create_progress_bar(0, track.length)
+        
+        # Embed Principal (Style Dark / Moderne)
+        embed = discord.Embed(color=0x5865F2) # Bleu Discord ou 0x000000 pour full black
+        
+        # Auteur et Icône
+        embed.set_author(name=f"Lecture en cours sur {player.channel.name}", icon_url="https://i.imgur.com/5s5y8bO.gif") # Petit gif d'equalizer
+        
+        # Titre et Lien
+        embed.title = track.title[:256]
+        embed.url = track.uri
+        
+        # Description : Barre de progression + Temps
+        embed.description = f"{bar}\n\n`00:00` / `{duration}`"
+        
+        # Champs d'info (Grid layout)
+        embed.add_field(name="👤 Artiste", value=f"**{track.author}**", inline=True)
+        embed.add_field(name="💿 Source", value=f"`{track.source.capitalize()}`", inline=True)
+        
+        # Info Prochaine musique
+        if not player.queue.is_empty:
+            next_track = player.queue[0]
+            embed.add_field(name="🔜 À suivre", value=f"{next_track.title}", inline=False)
+        else:
+            embed.add_field(name="🔜 À suivre", value="*Fin de la liste*", inline=False)
 
-        # Envoi de l'interface
+        # Image (Album Art) en Grand
+        if track.artwork: 
+            embed.set_image(url=track.artwork)
+        
+        # Footer technique
+        embed.set_footer(text=f"Volume: {player.volume}% • Effets: Aucun • OtoBot v2.0", icon_url=self.user.display_avatar.url)
+
         view = MusicControls(player)
         await player.home.send(embed=embed, view=view)
 
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
-        """Gère automatiquement la suite de la file d'attente"""
         player = payload.player
         if not player: return
-        
-        # Si la file n'est pas vide, on joue la suite
         if not player.queue.is_empty:
-            next_track = player.queue.get()
-            await player.play(next_track)
-        else:
-            # Si c'était la dernière, on ne fait rien (ou on peut déconnecter après un délai)
-            pass
+            await player.play(player.queue.get())
 
 bot = MusicBot()
 
 # --- COMMANDES SLASH ---
 
-@bot.tree.command(name="play", description="Lance une musique (YouTube, Spotify, SoundCloud...)")
-@app_commands.describe(recherche="Titre ou lien de la musique")
+@bot.tree.command(name="play", description="Joue une musique (YouTube, Spotify...)")
+@app_commands.describe(recherche="Titre ou lien")
 async def play(interaction: discord.Interaction, recherche: str):
     if not interaction.user.voice:
-        return await interaction.response.send_message("❌ **Tu dois être dans un salon vocal !**", ephemeral=True)
+        return await interaction.response.send_message("❌ Connecte-toi d'abord !", ephemeral=True)
     
     if not wavelink.Pool.get_node():
-        return await interaction.response.send_message("❌ **Lavalink démarre... Réessaie dans 30 secondes.**", ephemeral=True)
+        return await interaction.response.send_message("❌ Le système audio démarre...", ephemeral=True)
 
     await interaction.response.defer()
 
-    # Connexion au vocal
     if not interaction.guild.voice_client:
         try:
-            vc: wavelink.Player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
-        except Exception as e:
-            return await interaction.followup.send("❌ Impossible de rejoindre le salon.")
+            vc = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+        except:
+            return await interaction.followup.send("❌ Impossible de rejoindre.")
     else:
-        vc: wavelink.Player = interaction.guild.voice_client
+        vc = interaction.guild.voice_client
 
-    vc.home = interaction.channel # Définit où envoyer les messages
-    vc.autoplay = wavelink.AutoPlayMode.partial # Active l'autoplay intelligent si la file est vide
+    vc.home = interaction.channel
+    vc.autoplay = wavelink.AutoPlayMode.partial
 
-    # Recherche
     try:
         tracks = await wavelink.Playable.search(recherche)
     except Exception as e:
-        return await interaction.followup.send(f"❌ Erreur de recherche : {e}")
+        return await interaction.followup.send(f"❌ Erreur : {e}")
 
     if not tracks:
-        return await interaction.followup.send("❌ Aucune musique trouvée.")
+        return await interaction.followup.send("❌ Rien trouvé.")
 
-    # Gestion Playlist vs Track unique
     if isinstance(tracks, wavelink.Playlist):
-        added = await vc.queue.put_wait(tracks)
-        embed = discord.Embed(
-            title="✅ Playlist ajoutée",
-            description=f"**{tracks.name}**\nAjout de `{added}` pistes à la file.",
-            color=discord.Color.green()
-        )
+        await vc.queue.put_wait(tracks)
+        embed = discord.Embed(description=f"✅ **Playlist ajoutée :** {tracks.name} (`{len(tracks)}` sons)", color=0x43b581)
         await interaction.followup.send(embed=embed)
     else:
         track = tracks[0]
         await vc.queue.put_wait(track)
-        embed = discord.Embed(
-            title="✅ Ajouté à la file",
-            description=f"**{track.title}**\n*{track.author}*",
-            color=discord.Color.green()
-        )
+        embed = discord.Embed(description=f"✅ **Ajouté :** [{track.title}]({track.uri})", color=0x43b581)
         if track.artwork: embed.set_thumbnail(url=track.artwork)
         await interaction.followup.send(embed=embed)
         
-    # Si rien ne joue, on lance la musique
     if not vc.playing:
         await vc.play(vc.queue.get())
 
-@bot.tree.command(name="queue", description="Affiche la file d'attente actuelle")
-async def queue(interaction: discord.Interaction):
-    vc: wavelink.Player = interaction.guild.voice_client
-    if not vc or (not vc.playing and not vc.queue):
-        return await interaction.response.send_message("📭 **La file d'attente est vide.**", ephemeral=True)
-
-    queue_list = ""
-    # Affiche la musique en cours
-    if vc.playing:
-        current = vc.current
-        queue_list += f"**Lecture en cours :**\n🎶 [{current.title}]({current.uri}) - *{current.author}*\n\n**File d'attente :**\n"
-
-    # Affiche les 10 prochaines musiques
-    if vc.queue:
-        for i, track in enumerate(vc.queue[:10]):
-            queue_list += f"`{i+1}.` {track.title} - *{track.author}*\n"
-        
-        remaining = len(vc.queue) - 10
-        if remaining > 0:
-            queue_list += f"\n*...et {remaining} autres musiques.*"
-    else:
-        queue_list += "*Aucune musique après celle-ci.*"
-
-    embed = discord.Embed(title="📜 File d'attente", description=queue_list, color=discord.Color.blurple())
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="volume", description="Change le volume du bot (0 à 100)")
-@app_commands.describe(niveau="Le volume en pourcentage (défaut: 100)")
-async def volume(interaction: discord.Interaction, niveau: int):
-    vc: wavelink.Player = interaction.guild.voice_client
-    if not vc:
-        return await interaction.response.send_message("❌ Je ne suis pas connecté.", ephemeral=True)
-    
-    vol = max(0, min(100, niveau)) # Borne entre 0 et 100
-    await vc.set_volume(vol)
-    
-    embed = discord.Embed(description=f"🔊 **Volume réglé sur {vol}%**", color=discord.Color.gold())
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="stop", description="Arrête tout et déconnecte le bot")
+@bot.tree.command(name="stop", description="Stop le bot")
 async def stop(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc:
         await vc.disconnect()
-        await interaction.response.send_message("👋 **Au revoir !**")
+        await interaction.response.send_message("👋 Ciao !")
     else:
-        await interaction.response.send_message("❌ Je ne suis pas connecté.", ephemeral=True)
+        await interaction.response.send_message("❌ Pas connecté.", ephemeral=True)
 
-@bot.tree.command(name="skip", description="Passe à la musique suivante")
-async def skip(interaction: discord.Interaction):
+@bot.tree.command(name="volume", description="Régler le volume")
+async def volume(interaction: discord.Interaction, niveau: int):
     vc = interaction.guild.voice_client
-    if vc and vc.playing:
-        await vc.skip(force=True)
-        await interaction.response.send_message("⏭️ **Musique passée.**")
-    else:
-        await interaction.response.send_message("❌ Rien à passer.", ephemeral=True)
-
-@bot.tree.command(name="now", description="Affiche la musique en cours avec la barre de progression")
-async def now(interaction: discord.Interaction):
-    vc: wavelink.Player = interaction.guild.voice_client
-    if not vc or not vc.playing:
-        return await interaction.response.send_message("❌ Rien ne joue actuellement.", ephemeral=True)
-    
-    track = vc.current
-    position = int(vc.position)
-    duration = int(track.length)
-    
-    bar = create_progress_bar(position, duration)
-    time_str = f"{format_time(position)} / {format_time(duration)}"
-    
-    embed = discord.Embed(
-        title="🎶 Lecture en cours",
-        description=f"**[{track.title}]({track.uri})**\n\n{bar}\n`{time_str}`",
-        color=discord.Color.from_rgb(255, 0, 50)
-    )
-    if track.artwork: embed.set_thumbnail(url=track.artwork)
-    embed.set_footer(text=f"Volume: {vc.volume}%")
-    
-    await interaction.response.send_message(embed=embed)
+    if vc:
+        await vc.set_volume(max(0, min(100, niveau)))
+        await interaction.response.send_message(f"🔊 Volume : {vc.volume}%")
 
 # Lancement
 token = os.getenv('DISCORD_TOKEN')
