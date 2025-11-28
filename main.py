@@ -89,14 +89,21 @@ class MusicControls(discord.ui.View):
 
     @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=1)
     async def stop_music(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.player.queue.clear() # On vide la file pour être sûr
         await self.player.disconnect()
         await interaction.response.send_message("👋 **Fermeture du lecteur**", ephemeral=True)
         self.stop()
 
     @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, row=1)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏭️ **Passé !**", ephemeral=True)
-        await self.player.skip(force=True)
+        # Skip Robuste : On force la lecture du suivant manuellement
+        if not self.player.queue.is_empty:
+            next_track = self.player.queue.get()
+            await self.player.play(next_track)
+            await interaction.response.send_message(f"⏭️ **Passé :** {next_track.title}", ephemeral=True)
+        else:
+            await self.player.stop()
+            await interaction.response.send_message("⏭️ **Fin de la file.**", ephemeral=True)
 
     # --- LIGNE 2 : Options (Volume, Queue, Loop) ---
 
@@ -219,8 +226,13 @@ class MusicBot(commands.Bot):
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
         player = payload.player
         if not player: return
-        if not player.queue.is_empty:
-            await player.play(player.queue.get())
+        
+        # Logique Intelligente :
+        # On ne joue la suivante automatiquement QUE si la musique est finie naturellement (FINISHED).
+        # Si on a cliqué sur SKIP (REPLACED) ou STOP (STOPPED), on laisse les boutons gérer ça.
+        if payload.reason == "FINISHED":
+            if not player.queue.is_empty:
+                await player.play(player.queue.get())
 
 bot = MusicBot()
 
