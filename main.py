@@ -7,7 +7,6 @@ import os
 import asyncio
 
 # --- CONFIGURATION ---
-# Mise à jour avec ton lien Railway
 LAVALINK_URI = os.getenv("LAVALINK_URI", "lavalink2-production-82e6.up.railway.app")
 LAVALINK_PASS = os.getenv("LAVALINK_PASS", "youshallnotpass")
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "True").lower() == "true"
@@ -37,11 +36,13 @@ class MusicControls(discord.ui.View):
         await self.player.skip(force=True)
         await interaction.response.send_message("⏭️ Musique passée.", ephemeral=True)
 
+    # CORRECTION ICI : J'ai renommé la fonction 'stop' en 'stop_music'
+    # Cela évite le conflit avec la méthode self.stop() native de Discord.ui
     @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger)
-    async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def stop_music(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.player.disconnect()
         await interaction.response.send_message("👋 Déconnexion.", ephemeral=True)
-        self.stop()
+        self.stop() # Maintenant, ceci appelle bien la fonction pour arrêter les boutons
 
     @discord.ui.button(emoji="🔂", style=discord.ButtonStyle.secondary)
     async def loop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -70,7 +71,6 @@ class MusicBot(commands.Bot):
                 password=LAVALINK_PASS
             )
         ]
-        # Connexion robuste avec retry automatique
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=100)
         print(f"✅ Tentative de connexion à Lavalink sur {LAVALINK_URI}...")
 
