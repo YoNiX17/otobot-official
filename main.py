@@ -196,4 +196,4 @@ async def volume(interaction: discord.Interaction, niveau: int):
 
 # Lancer le bot
 # REMPLACE 'TON_TOKEN_ICI' PAR LE VRAI TOKEN DE TON BOT DISCORD
-bot.run('TON_TOKEN_ICI')
+bot.run('MTM4MzgzMTQ5ODM3NzAwNzE4NQ.GV8Zlw.KPBAynpJUEMBsD9UXnphEUT0mAliiPhciAJt2A')
