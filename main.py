@@ -3,14 +3,16 @@ from discord import app_commands
 from discord.ext import commands
 import wavelink
 import logging
-import os  # Nécessaire pour lire les variables d'environnement
+import os
+import asyncio
 
 # --- CONFIGURATION ---
-LAVALINK_URI = "lavalink2-lcko.onrender.com" # Ton serveur Render
-LAVALINK_PASS = "youshallnotpass"            # Ton mot de passe défini dans application.yml
-HTTPS_ENABLED = True                         # Render utilise HTTPS (Port 443)
+# Sur Railway, si Lavalink est dans le même projet, tu peux utiliser son nom de service interne
+# Sinon, utilise l'URL publique fournie par Railway.
+LAVALINK_URI = os.getenv("LAVALINK_URI", "ton-lavalink.up.railway.app")
+LAVALINK_PASS = os.getenv("LAVALINK_PASS", "youshallnotpass")
+HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "True").lower() == "true"
 
-# Configuration des logs pour voir ce qui se passe
 logging.basicConfig(level=logging.INFO)
 
 # --- CLASSE DES BOUTONS DE CONTRÔLE ---
@@ -44,7 +46,6 @@ class MusicControls(discord.ui.View):
 
     @discord.ui.button(emoji="🔂", style=discord.ButtonStyle.secondary)
     async def loop(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Inverse le mode loop
         if self.player.queue.mode == wavelink.QueueMode.normal:
             self.player.queue.mode = wavelink.QueueMode.loop
             button.style = discord.ButtonStyle.green
@@ -56,7 +57,7 @@ class MusicControls(discord.ui.View):
         await interaction.message.edit(view=self)
 
 
-# --- CLASSE PRINCIPALE DU BOT ---
+# --- BOT ---
 class MusicBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -64,19 +65,18 @@ class MusicBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # Connexion à Lavalink au démarrage
         nodes = [
             wavelink.Node(
                 uri=f"https://{LAVALINK_URI}:443" if HTTPS_ENABLED else f"http://{LAVALINK_URI}:2333", 
                 password=LAVALINK_PASS
             )
         ]
+        # Connexion robuste avec retry automatique
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=100)
-        print("✅ Connecté à Lavalink !")
+        print("✅ Tentative de connexion à Lavalink...")
 
     async def on_ready(self):
         print(f'🤖 Connecté en tant que {self.user} (ID: {self.user.id})')
-        # Synchronisation des commandes slash (peut prendre jusqu'à 1h globalement, mais instantané sur ton serveur de dev)
         try:
             synced = await self.tree.sync()
             print(f"🔄 {len(synced)} commandes slash synchronisées.")
@@ -84,121 +84,89 @@ class MusicBot(commands.Bot):
             print(f"Erreur de synchro : {e}")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
-        print(f"Node Lavalink prêt : {payload.node.identifier}")
+        print(f"✅ Node Lavalink EN LIGNE : {payload.node.identifier}")
 
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
         player = payload.player
-        if not player:
-            return
-
+        if not player: return
         track = payload.track
         
-        # Création de l'interface "Belle" (Embed)
         embed = discord.Embed(
             title="🎶 Lecture en cours",
             description=f"**[{track.title}]({track.uri})**",
-            color=discord.Color.from_rgb(29, 185, 84) # Vert Spotify
+            color=discord.Color.from_rgb(29, 185, 84)
         )
         embed.add_field(name="Artiste", value=track.author, inline=True)
         
-        # Gestion de la durée (ms -> min:sec)
         duration_min = track.length // 60000
         duration_sec = (track.length % 60000) // 1000
         embed.add_field(name="Durée", value=f"{duration_min}:{duration_sec:02d}", inline=True)
+        if track.artwork: embed.set_thumbnail(url=track.artwork)
         
-        if track.artwork:
-            embed.set_thumbnail(url=track.artwork)
-        
-        embed.set_footer(text=f"Source : {track.source}")
-
-        # Envoi du message avec les boutons
         view = MusicControls(player)
         await player.home.send(embed=embed, view=view)
 
-
 bot = MusicBot()
 
-
-# --- COMMANDES SLASH (/) ---
-
-@bot.tree.command(name="play", description="Joue une musique depuis YouTube ou Spotify")
-@app_commands.describe(recherche="Lien ou nom de la musique")
+# --- COMMANDES SLASH ---
+@bot.tree.command(name="play", description="Joue une musique")
+@app_commands.describe(recherche="Lien ou nom")
 async def play(interaction: discord.Interaction, recherche: str):
-    """Joue une musique."""
     if not interaction.user.voice:
-        return await interaction.response.send_message("❌ Tu dois être dans un canal vocal !", ephemeral=True)
+        return await interaction.response.send_message("❌ Connecte-toi d'abord en vocal !", ephemeral=True)
+    if not wavelink.Pool.get_node():
+        return await interaction.response.send_message("❌ Lavalink n'est pas encore prêt.", ephemeral=True)
 
-    await interaction.response.defer() # Donne du temps au bot pour chercher
+    await interaction.response.defer()
 
-    # Connexion au vocal si nécessaire
     if not interaction.guild.voice_client:
-        vc: wavelink.Player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+        vc = await interaction.user.voice.channel.connect(cls=wavelink.Player)
     else:
-        vc: wavelink.Player = interaction.guild.voice_client
+        vc = interaction.guild.voice_client
 
-    # On définit le canal textuel pour envoyer les messages "Now Playing"
     vc.home = interaction.channel
 
-    # Recherche de la musique (Gère Spotify et YouTube grâce à LavaSrc côté serveur)
     try:
         tracks = await wavelink.Playable.search(recherche)
     except Exception as e:
-        return await interaction.followup.send(f"❌ Erreur lors de la recherche : {e}")
+        return await interaction.followup.send(f"❌ Erreur : {e}")
 
     if not tracks:
-        return await interaction.followup.send("❌ Aucune musique trouvée.")
+        return await interaction.followup.send("❌ Rien trouvé.")
 
-    # Gestion Playlist vs Musique seule
     if isinstance(tracks, wavelink.Playlist):
-        added = await vc.queue.put_wait(tracks)
-        response = f"✅ Ajout de la playlist **{tracks.name}** ({added} musiques) à la file."
-        first_track = tracks[0]
+        await vc.queue.put_wait(tracks)
+        response = f"✅ Playlist **{tracks.name}** ajoutée."
     else:
         track = tracks[0]
         await vc.queue.put_wait(track)
-        response = f"✅ Ajouté à la file : **{track.title}**"
+        response = f"✅ **{track.title}** ajouté."
         
     if not vc.playing:
         await vc.play(vc.queue.get())
 
     await interaction.followup.send(response)
 
-
-@bot.tree.command(name="skip", description="Passe à la musique suivante")
-async def skip(interaction: discord.Interaction):
-    vc: wavelink.Player = interaction.guild.voice_client
-    if vc and vc.playing:
-        await vc.skip(force=True)
-        await interaction.response.send_message("⏭️ Musique passée.")
-    else:
-        await interaction.response.send_message("❌ Rien ne joue actuellement.", ephemeral=True)
-
-
-@bot.tree.command(name="stop", description="Arrête la musique et déconnecte le bot")
+@bot.tree.command(name="stop", description="Stop et déconnexion")
 async def stop(interaction: discord.Interaction):
-    vc: wavelink.Player = interaction.guild.voice_client
+    vc = interaction.guild.voice_client
     if vc:
         await vc.disconnect()
-        await interaction.response.send_message("👋 Ciao !")
+        await interaction.response.send_message("👋 Au revoir.")
     else:
         await interaction.response.send_message("❌ Je ne suis pas connecté.", ephemeral=True)
 
-
-@bot.tree.command(name="volume", description="Change le volume (0-100)")
-async def volume(interaction: discord.Interaction, niveau: int):
-    vc: wavelink.Player = interaction.guild.voice_client
-    if vc:
-        # Limite de sécurité 0-100
-        vol = max(0, min(100, niveau))
-        await vc.set_volume(vol)
-        await interaction.response.send_message(f"🔊 Volume réglé sur {vol}%")
+@bot.tree.command(name="skip", description="Suivant")
+async def skip(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc and vc.playing:
+        await vc.skip(force=True)
+        await interaction.response.send_message("⏭️ Suivant.")
     else:
-        await interaction.response.send_message("❌ Je ne suis pas connecté.", ephemeral=True)
+        await interaction.response.send_message("❌ Rien à passer.", ephemeral=True)
 
-# Lancer le bot
-# On récupère le token de sécurité depuis les variables d'environnement
 token = os.getenv('DISCORD_TOKEN')
 if not token:
-    print("❌ ERREUR : Le token n'est pas configuré dans les variables d'environnement !")
+    print("❌ ERREUR : Variable DISCORD_TOKEN manquante")
 else:
     bot.run(token)
