@@ -7,9 +7,9 @@ import os
 import asyncio
 
 # --- CONFIGURATION ---
-# Sur Railway, si Lavalink est dans le même projet, tu peux utiliser son nom de service interne
-# Sinon, utilise l'URL publique fournie par Railway.
-LAVALINK_URI = os.getenv("LAVALINK_URI", "ton-lavalink.up.railway.app")
+# J'ai remis ton adresse Render par défaut pour que ça marche tout de suite.
+# Si tu utilises Railway, change cette adresse ou configure la variable d'environnement LAVALINK_URI.
+LAVALINK_URI = os.getenv("LAVALINK_URI", "lavalink2-lcko.onrender.com")
 LAVALINK_PASS = os.getenv("LAVALINK_PASS", "youshallnotpass")
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "True").lower() == "true"
 
@@ -73,7 +73,7 @@ class MusicBot(commands.Bot):
         ]
         # Connexion robuste avec retry automatique
         await wavelink.Pool.connect(nodes=nodes, client=self, cache_capacity=100)
-        print("✅ Tentative de connexion à Lavalink...")
+        print(f"✅ Tentative de connexion à Lavalink sur {LAVALINK_URI}...")
 
     async def on_ready(self):
         print(f'🤖 Connecté en tant que {self.user} (ID: {self.user.id})')
