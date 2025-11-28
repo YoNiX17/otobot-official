@@ -7,9 +7,8 @@ import os
 import asyncio
 
 # --- CONFIGURATION ---
-# J'ai remis ton adresse Render par défaut pour que ça marche tout de suite.
-# Si tu utilises Railway, change cette adresse ou configure la variable d'environnement LAVALINK_URI.
-LAVALINK_URI = os.getenv("LAVALINK_URI", "lavalink2-lcko.onrender.com")
+# Mise à jour avec ton lien Railway
+LAVALINK_URI = os.getenv("LAVALINK_URI", "lavalink2-production-82e6.up.railway.app")
 LAVALINK_PASS = os.getenv("LAVALINK_PASS", "youshallnotpass")
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "True").lower() == "true"
 
