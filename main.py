@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import wavelink
 import logging
+import os  # Nécessaire pour lire les variables d'environnement
 
 # --- CONFIGURATION ---
 LAVALINK_URI = "lavalink2-lcko.onrender.com" # Ton serveur Render
@@ -195,5 +196,9 @@ async def volume(interaction: discord.Interaction, niveau: int):
         await interaction.response.send_message("❌ Je ne suis pas connecté.", ephemeral=True)
 
 # Lancer le bot
-# REMPLACE 'TON_TOKEN_ICI' PAR LE VRAI TOKEN DE TON BOT DISCORD
-bot.run('MTM4MzgzMTQ5ODM3NzAwNzE4NQ.GV8Zlw.KPBAynpJUEMBsD9UXnphEUT0mAliiPhciAJt2A')
+# On récupère le token de sécurité depuis les variables d'environnement
+token = os.getenv('DISCORD_TOKEN')
+if not token:
+    print("❌ ERREUR : Le token n'est pas configuré dans les variables d'environnement !")
+else:
+    bot.run(token)
